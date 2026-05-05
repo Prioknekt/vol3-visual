@@ -11,6 +11,9 @@ import os
 import sys
 import subprocess
 import threading
+import urllib.request
+import zipfile
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +44,6 @@ class QviTable(DataTable):
         Binding("end",      "scroll_bottom","End", show=False),
         Binding("pageup",   "page_up",     "PgUp", show=False),
         Binding("pagedown", "page_down",   "PgDn", show=False),
-        # Forward to app actions so navigation/open works the way the user expects.
         Binding("right",    "app.open",    "Open", show=False),
         Binding("enter",    "app.open",    "Open", show=False),
         Binding("left",     "app.back",    "Back", show=False),
@@ -151,6 +153,42 @@ OS_LABELS    = {"windows": "Windows", "linux": "Linux", "mac": "macOS"}
 def plugins_for_os(os_type: str) -> list[dict]:
     return [p for p in PLUGINS if p["os"] in (os_type, "any")]
 
+def setup_volatility_requirements():
+    """Ensures pycryptodome is installed and symbols are downloaded for offline use."""
+    # 1. Ensure pycryptodome is installed (required for hashdump)
+    try:
+        import Crypto
+    except ImportError:
+        print("[*] Installing missing dependency: pycryptodome...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pycryptodome"])
+
+    # 2. Setup Symbol Cache
+    # Volatility 3 standard path: ~/.cache/volatility3/symbols or %LOCALAPPDATA%
+    cache_dir = Path.home() / ".cache" / "volatility3" / "symbols"
+    if os.name == "nt":
+        cache_dir = Path(os.getenv("LOCALAPPDATA")) / "volatility3" / "symbols"
+    
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    symbol_urls = {
+        "windows.zip": "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip",
+        "linux.zip": "https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip",
+        "mac.zip": "https://downloads.volatilityfoundation.org/volatility3/symbols/mac.zip"
+    }
+
+    for file_name, url in symbol_urls.items():
+        zip_path = cache_dir / file_name
+        if not zip_path.exists():
+            print(f"[*] Downloading {file_name} for offline use (this may take a moment)...")
+            try:
+                urllib.request.urlretrieve(url, zip_path)
+                # We don't necessarily need to extract; Vol3 can read the zips directly
+                # but extracting ensures compatibility.
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(cache_dir)
+                print(f"[+] {file_name} ready.")
+            except Exception as e:
+                print(f"[-] Failed to download {file_name}: {e}")
 
 # ── Cache helpers ──────────────────────────────────────────────────────────
 def _cache_path(dump: str) -> Path:
@@ -1102,6 +1140,8 @@ def _prompt_dump_path() -> str | None:
 
 
 def main() -> None:
+
+    setup_volatility_requirements()
     args = sys.argv[1:]
     fresh = "--fresh" in args
     args = [a for a in args if a != "--fresh"]
